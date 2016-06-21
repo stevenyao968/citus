@@ -94,9 +94,6 @@ SET client_min_messages TO 'DEBUG2';
 -- insert a single row for the test
 INSERT INTO articles_single_shard_hash VALUES (50, 10, 'anjanette', 19519);
 
--- first, test zero-shard SELECT, which should return an empty row
-SELECT COUNT(*) FROM articles_hash WHERE author_id = 1 AND author_id = 2;
-
 -- single-shard tests
 
 -- test simple select for a single row
@@ -152,19 +149,53 @@ SELECT * FROM articles_hash WHERE author_id = 1;
 SELECT * FROM articles_hash WHERE author_id <= 1; 
 SELECT * FROM articles_hash WHERE author_id IN (1, 3); 
 
--- queries using CTEs are unsupported
+-- queries with CTEs are supported
+WITH first_author AS ( SELECT id FROM articles_hash WHERE author_id = 1)
+SELECT * FROM first_author;
+
+-- queries with CTEs are supported when CTE is not referenced inside query
 WITH first_author AS ( SELECT id FROM articles_hash WHERE author_id = 1)
 SELECT title FROM articles_hash WHERE author_id = 1;
 
--- queries which involve functions in FROM clause are unsupported.
+-- two CTE joins are supported if they go to the same worker
+WITH id_author AS ( SELECT id, author_id FROM articles_hash WHERE author_id = 1),
+id_title AS (SELECT id, title from articles_hash WHERE author_id = 1)
+SELECT * FROM id_author, id_title WHERE id_author.id = id_title.id;
+
+WITH id_author AS ( SELECT id, author_id FROM articles_hash WHERE author_id = 1),
+id_title AS (SELECT id, title from articles_hash WHERE author_id = 3)
+SELECT * FROM id_author, id_title WHERE id_author.id = id_title.id;
+
+-- CTE joins are not supported if table shards are at different workers
+WITH id_author AS ( SELECT id, author_id FROM articles_hash WHERE author_id = 1),
+id_title AS (SELECT id, title from articles_hash WHERE author_id = 2)
+SELECT * FROM id_author, id_title WHERE id_author.id = id_title.id;
+
+-- queries which involve functions in FROM clause are supported if it goes to a single worker.
 SELECT * FROM articles_hash, position('om' in 'Thomas') WHERE author_id = 1;
+
+SELECT * FROM articles_hash, position('om' in 'Thomas') WHERE author_id = 1 or author_id = 3;
+
+-- they are not supported if multiple workers are involved
+SELECT * FROM articles_hash, position('om' in 'Thomas') WHERE author_id = 1 or author_id = 2;
 
 -- subqueries are not supported in WHERE clause in Citus
 SELECT * FROM articles_hash WHERE author_id IN (SELECT id FROM authors_hash WHERE name LIKE '%a');
 
+SELECT * FROM articles_hash WHERE author_id IN (SELECT author_id FROM articles_hash WHERE author_id = 1 or author_id = 3);
+
+SELECT * FROM articles_hash WHERE author_id = (SELECT 1);
+
+
 -- subqueries are supported in FROM clause but they are not router plannable
 SELECT articles_hash.id,test.word_count
 FROM articles_hash, (SELECT id, word_count FROM articles_hash) AS test WHERE test.id = articles_hash.id
+ORDER BY articles_hash.id;
+
+
+SELECT articles_hash.id,test.word_count
+FROM articles_hash, (SELECT id, word_count FROM articles_hash) AS test 
+WHERE test.id = articles_hash.id and articles_hash.author_id = 1
 ORDER BY articles_hash.id;
 
 -- subqueries are not supported in SELECT clause
@@ -176,8 +207,7 @@ SELECT *
 	FROM articles_hash
 	WHERE author_id = 1;
 
--- below query hits a single shard, but it is not router plannable
--- still router executable
+-- below query hits a single shard, router plannable
 SELECT *
 	FROM articles_hash
 	WHERE author_id = 1 OR author_id = 17;
@@ -194,17 +224,23 @@ SELECT id as article_id, word_count * id as random_value
 	WHERE author_id = 1;
 
 -- we can push down co-located joins to a single worker
--- this is not router plannable but router executable
--- handled by real-time executor
 SELECT a.author_id as first_author, b.word_count as second_word_count
 	FROM articles_hash a, articles_hash b
 	WHERE a.author_id = 10 and a.author_id = b.author_id
 	LIMIT 3;
 
--- following join is neither router plannable, nor router executable
+-- following join is router plannable since the same worker 
+-- has both shards
 SELECT a.author_id as first_author, b.word_count as second_word_count
 	FROM articles_hash a, articles_single_shard_hash b
 	WHERE a.author_id = 10 and a.author_id = b.author_id
+	LIMIT 3;
+	
+-- following join is not router plannable since there are no
+-- workers containing both shards	
+SELECT a.author_id as first_author, b.word_count as second_word_count
+	FROM articles_hash a, articles_single_shard_hash b
+	WHERE a.author_id = 2 and a.author_id = b.author_id
 	LIMIT 3;
 
 -- single shard select with limit is router plannable
@@ -275,7 +311,7 @@ SET citus.task_executor_type TO 'real-time';
 SET client_min_messages to 'DEBUG2';
 
 -- this is definitely single shard
--- but not router plannable
+-- and router plannable
 SELECT *
 	FROM articles_hash
 	WHERE author_id = 1 and author_id >= 1;
@@ -387,11 +423,9 @@ SELECT id, MIN(id) over (order by word_count)
 	FROM articles_hash
 	WHERE author_id = 1 or author_id = 2;
 
-	
--- but they are not supported for not router plannable queries
 SELECT LAG(title, 1) over (ORDER BY word_count) prev, title, word_count 
 	FROM articles_hash
-	WHERE author_id = 5 or author_id = 1;
+	WHERE author_id = 5 or author_id = 2;
 
 -- complex query hitting a single shard 	
 SELECT
@@ -475,6 +509,7 @@ PREPARE author_1_articles as
 EXECUTE author_1_articles;
 
 -- parametric prepare queries can be router plannable
+-- pending fix 
 PREPARE author_articles(int) as
 	SELECT *
 	FROM articles_hash

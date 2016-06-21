@@ -114,7 +114,7 @@ COPY nation(n_name) TO STDOUT;
 
 BEGIN;
 
-CREATE TEMP TABLE customer_few (customer_key) WITH (OIDS) ON COMMIT DROP AS 
+CREATE TEMP TABLE customer_few (customer_key) ON COMMIT DROP AS 
     (SELECT * FROM customer WHERE c_nationkey = 1 ORDER BY c_custkey LIMIT 10);
 
 SELECT customer_key, c_name, c_address 
