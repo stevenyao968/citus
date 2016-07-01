@@ -229,6 +229,16 @@ pg_get_tableschemadef_string(Oid tableRelationId)
 	AttrNumber constraintIndex = 0;
 	AttrNumber constraintCount = 0;
 	StringInfoData buffer = { NULL, 0, 0, 0 };
+	OverrideSearchPath *overridePath = GetOverrideSearchPath(CurrentMemoryContext);
+
+	/*
+	 * Set search_path to NIL so that all objects outside of pg_catalog will be
+	 * schema-prefixed. pg_catalog will be added automatically when we call
+	 * PushOverrideSearchPath(), since we set addCatalog to true;
+	 */
+	overridePath->schemas = NIL;
+	overridePath->addCatalog = true;
+	PushOverrideSearchPath(overridePath);
 
 	/*
 	 * Instead of retrieving values from system catalogs as other functions in
@@ -272,58 +282,60 @@ pg_get_tableschemadef_string(Oid tableRelationId)
 		const char *attributeName = NULL;
 		const char *attributeTypeName = NULL;
 
-		if (!attributeForm->attisdropped && attributeForm->attinhcount == 0)
+		if (attributeForm->attisdropped || attributeForm->attinhcount != 0)
 		{
-			if (firstAttributePrinted)
-			{
-				appendStringInfoString(&buffer, ", ");
-			}
-			firstAttributePrinted = true;
+			continue;
+		}
 
-			attributeName = NameStr(attributeForm->attname);
-			appendStringInfo(&buffer, "%s ", quote_identifier(attributeName));
+		if (firstAttributePrinted)
+		{
+			appendStringInfoString(&buffer, ", ");
+		}
+		firstAttributePrinted = true;
 
-			attributeTypeName = format_type_with_typemod(attributeForm->atttypid,
-														 attributeForm->atttypmod);
-			appendStringInfoString(&buffer, attributeTypeName);
+		attributeName = NameStr(attributeForm->attname);
+		appendStringInfo(&buffer, "%s ", quote_identifier(attributeName));
 
-			/* if this column has a default value, append the default value */
-			if (attributeForm->atthasdef)
-			{
-				AttrDefault *defaultValueList = NULL;
-				AttrDefault *defaultValue = NULL;
+		attributeTypeName = format_type_with_typemod(attributeForm->atttypid,
+													 attributeForm->atttypmod);
+		appendStringInfoString(&buffer, attributeTypeName);
 
-				Node *defaultNode = NULL;
-				List *defaultContext = NULL;
-				char *defaultString = NULL;
+		/* if this column has a default value, append the default value */
+		if (attributeForm->atthasdef)
+		{
+			AttrDefault *defaultValueList = NULL;
+			AttrDefault *defaultValue = NULL;
 
-				Assert(tupleConstraints != NULL);
+			Node *defaultNode = NULL;
+			List *defaultContext = NULL;
+			char *defaultString = NULL;
 
-				defaultValueList = tupleConstraints->defval;
-				Assert(defaultValueList != NULL);
+			Assert(tupleConstraints != NULL);
 
-				defaultValue = &(defaultValueList[defaultValueIndex]);
-				defaultValueIndex++;
+			defaultValueList = tupleConstraints->defval;
+			Assert(defaultValueList != NULL);
 
-				Assert(defaultValue->adnum == (attributeIndex + 1));
-				Assert(defaultValueIndex <= tupleConstraints->num_defval);
+			defaultValue = &(defaultValueList[defaultValueIndex]);
+			defaultValueIndex++;
 
-				/* convert expression to node tree, and prepare deparse context */
-				defaultNode = (Node *) stringToNode(defaultValue->adbin);
-				defaultContext = deparse_context_for(relationName, tableRelationId);
+			Assert(defaultValue->adnum == (attributeIndex + 1));
+			Assert(defaultValueIndex <= tupleConstraints->num_defval);
 
-				/* deparse default value string */
-				defaultString = deparse_expression(defaultNode, defaultContext,
-												   false, false);
+			/* convert expression to node tree, and prepare deparse context */
+			defaultNode = (Node *) stringToNode(defaultValue->adbin);
+			defaultContext = deparse_context_for(relationName, tableRelationId);
 
-				appendStringInfo(&buffer, " DEFAULT %s", defaultString);
-			}
+			/* deparse default value string */
+			defaultString = deparse_expression(defaultNode, defaultContext,
+											   false, false);
 
-			/* if this column has a not null constraint, append the constraint */
-			if (attributeForm->attnotnull)
-			{
-				appendStringInfoString(&buffer, " NOT NULL");
-			}
+			appendStringInfo(&buffer, " DEFAULT %s", defaultString);
+		}
+
+		/* if this column has a not null constraint, append the constraint */
+		if (attributeForm->attnotnull)
+		{
+			appendStringInfoString(&buffer, " NOT NULL");
 		}
 	}
 
@@ -383,6 +395,8 @@ pg_get_tableschemadef_string(Oid tableRelationId)
 	}
 
 	relation_close(relation, AccessShareLock);
+
+	PopOverrideSearchPath();
 
 	return (buffer.data);
 }
