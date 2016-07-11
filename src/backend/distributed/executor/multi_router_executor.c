@@ -23,6 +23,7 @@
 #include "distributed/citus_ruleutils.h"
 #include "distributed/connection_cache.h"
 #include "distributed/listutils.h"
+#include "distributed/metadata_cache.h"
 #include "distributed/multi_executor.h"
 #include "distributed/multi_physical_planner.h"
 #include "distributed/multi_planner.h"
@@ -72,6 +73,7 @@ static void RouterSubtransactionCallback(SubXactEvent event, SubTransactionId su
 static HTAB * CreateXactParticipantHash(void);
 static uint64 * AllocateUint64(uint64 value);
 static PGconn * GetConnectionForPlacement(ShardPlacement *placement);
+static void PurgeConnectionForPlacement(ShardPlacement *placement);
 static void RecordParticipatingShardId(uint64 newShardId,
 									   XactParticipantEntry *participant);
 static void MarkParticipantShardsUnhealthy(XactParticipantEntry *participant);
@@ -427,7 +429,7 @@ ExecuteTaskAndStoreResults(QueryDesc *queryDesc, Task *task,
 		queryOK = SendQueryInSingleRowMode(connection, queryString);
 		if (!queryOK)
 		{
-			PurgeConnection(connection);
+			PurgeConnectionForPlacement(taskPlacement);
 			failedPlacementList = lappend(failedPlacementList, taskPlacement);
 			continue;
 		}
@@ -484,7 +486,7 @@ ExecuteTaskAndStoreResults(QueryDesc *queryDesc, Task *task,
 		}
 		else
 		{
-			PurgeConnection(connection);
+			PurgeConnectionForPlacement(taskPlacement);
 
 			failedPlacementList = lappend(failedPlacementList, taskPlacement);
 
@@ -850,6 +852,7 @@ ExecuteTransactionEnd(bool commit)
 		if (PQresultStatus(result) != PGRES_COMMAND_OK)
 		{
 			WarnRemoteError(connection, result);
+			PurgeConnection(connection);
 
 			if (commit)
 			{
@@ -1088,6 +1091,38 @@ GetConnectionForPlacement(ShardPlacement *placement)
 	{
 		/* TODO: wording */
 		ereport(ERROR, (errmsg("UNEXPECTED PLACEMENT")));
+	}
+}
+
+
+static void
+PurgeConnectionForPlacement(ShardPlacement *placement)
+{
+	NodeConnectionKey nodeKey;
+	char *currentUser = CurrentUserName();
+
+	MemSet(&nodeKey, 0, sizeof(NodeConnectionKey));
+	strncpy(nodeKey.nodeName, placement->nodeName, MAX_NODE_LENGTH);
+	nodeKey.nodePort = placement->nodePort;
+	strncpy(nodeKey.nodeUser, currentUser, NAMEDATALEN);
+
+	PurgeConnectionByKey(&nodeKey);
+
+	if (xactParticipantHash != NULL)
+	{
+		XactParticipantKey participantKey;
+		XactParticipantEntry *participantEntry = NULL;
+		bool entryFound = false;
+
+		Assert(IsTransactionBlock());
+
+		memcpy(&participantKey, &nodeKey, sizeof(XactParticipantKey));
+		participantEntry = hash_search(xactParticipantHash, &participantKey, HASH_FIND,
+									   &entryFound);
+
+		Assert(entryFound);
+
+		participantEntry->connection = NULL;
 	}
 }
 
