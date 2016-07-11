@@ -22,6 +22,7 @@
 #include "distributed/connection_cache.h"
 #include "distributed/multi_client_executor.h"
 #include "distributed/multi_server_executor.h"
+#include "utils/lsyscache.h"
 
 #include <errno.h>
 #include <unistd.h>
@@ -334,22 +335,46 @@ MultiClientSendQueryParams(int32 connectionId, const char *query, ParamListInfo 
 	PGconn *connection = NULL;
 	bool success = true;
 	int querySent = 0;
-	ParamExternData paramData = executorParams->params[0];
 
 	Assert(connectionId != INVALID_CONNECTION_ID);
 	connection = ClientConnectionArray[connectionId];
 	Assert(connection != NULL);
 
-	/*
-	 * XXX Need to convert executorParams->params (ParamExternData array) into
-	 * 			  const Oid *paramTypes,
-	 *			  const char *const * paramValues,
-	 *			  const int *paramLengths,
-	 *			  const int *paramFormats
-	 * to use in PQsendQueryParams().
-	 * querySent = PQsendQueryParams(connection, query, ...);
-	 */
-	querySent = PQsendQuery(connection, query);
+	if (executorParams != NULL)
+	{
+		int paramIndex = 0;
+		int paramCount = executorParams->numParams;
+
+		Oid *paramTypes = palloc(paramCount * sizeof(Oid));
+		const char **paramValues = palloc(paramCount * sizeof(char *));
+
+		for (paramIndex = 0; paramIndex < paramCount; paramIndex++)
+		{
+			ParamExternData *paramData = &executorParams->params[paramIndex];
+			Oid	typoutput = InvalidOid;
+			bool typisvarlena = false;
+
+			if (paramData->isnull || !OidIsValid(paramData->ptype))
+			{
+				paramTypes[paramIndex] = InvalidOid;
+				paramValues[paramIndex] = NULL;
+				continue;
+			}
+
+			paramTypes[paramIndex] = paramData->ptype;
+
+			getTypeOutputInfo(paramData->ptype, &typoutput, &typisvarlena);
+			paramValues[paramIndex] = OidOutputFunctionCall(typoutput, paramData->value);
+		}
+
+		querySent = PQsendQueryParams(connection, query, paramCount, paramTypes, paramValues,
+									  NULL, NULL, 0);
+	}
+	else
+	{
+		querySent = PQsendQuery(connection, query);
+	}
+
 	if (querySent == 0)
 	{
 		char *errorMessage = PQerrorMessage(connection);

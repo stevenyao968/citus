@@ -476,7 +476,8 @@ ManageTaskExecution(Task *task, TaskExecution *taskExecution,
 								 queryString);
 			}
 
-			querySent = MultiClientSendQuery(connectionId, computeTaskQuery->data);
+			querySent = MultiClientSendQueryParams(connectionId, computeTaskQuery->data,
+												   executorParams);
 			if (querySent)
 			{
 				taskStatusArray[currentIndex] = EXEC_COMPUTE_TASK_RUNNING;
