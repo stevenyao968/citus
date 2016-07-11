@@ -410,6 +410,16 @@ SELECT o_custkey, COUNT(*) AS ccnt FROM orders GROUP BY o_custkey ORDER BY ccnt 
 CREATE TEMP TABLE temp_limit_test_5 AS
 SELECT o_custkey, COUNT(*) AS ccnt FROM orders GROUP BY o_custkey LIMIT 10 OFFSET 15;
 RESET client_min_messages;
+-- OFFSET without LIMIT
+SELECT o_custkey FROM orders ORDER BY o_custkey OFFSET 2980;
+ o_custkey 
+-----------
+      1498
+      1499
+      1499
+      1499
+(4 rows)
+
 -- LIMIT/OFFSET with Joins
 SELECT 
 	li.l_partkey,

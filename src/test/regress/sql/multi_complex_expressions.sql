@@ -202,6 +202,9 @@ SELECT o_custkey, COUNT(*) AS ccnt FROM orders GROUP BY o_custkey LIMIT 10 OFFSE
 
 RESET client_min_messages;
 
+-- OFFSET without LIMIT
+SELECT o_custkey FROM orders ORDER BY o_custkey OFFSET 2980;
+
 -- LIMIT/OFFSET with Joins
 SELECT 
 	li.l_partkey,
