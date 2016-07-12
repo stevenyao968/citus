@@ -51,18 +51,19 @@ static bool ReceiveRegularFile(const char *nodeName, uint32 nodePort,
 static void ReceiveResourceCleanup(int32 connectionId, const char *filename,
 								   int32 fileDescriptor);
 static void DeleteFile(const char *filename);
-static void FetchTableCommon(text *tableName, uint64 remoteTableSize,
-							 ArrayType *nodeNameObject, ArrayType *nodePortObject,
+static void FetchTableCommon(text *tableSchemaNameText, text *tableName,
+							 uint64 remoteTableSize, ArrayType *nodeNameObject,
+							 ArrayType *nodePortObject,
 							 bool (*FetchTableFunction)(const char *, uint32,
-														StringInfo));
+														const char *, StringInfo));
 static uint64 LocalTableSize(Oid relationId);
 static uint64 ExtractShardId(StringInfo tableName);
 static bool FetchRegularTable(const char *nodeName, uint32 nodePort,
-							  StringInfo tableName);
+							  const char *schemaName, StringInfo tableName);
 static bool FetchForeignTable(const char *nodeName, uint32 nodePort,
-							  StringInfo tableName);
+							  const char *schemaName, StringInfo tableName);
 static const char * RemoteTableOwner(const char *nodeName, uint32 nodePort,
-									 StringInfo tableName);
+									 const char *schemaName, const char * tableName);
 static StringInfo ForeignFilePath(const char *nodeName, uint32 nodePort,
 								  StringInfo tableName);
 static bool check_log_statement(List *stmt_list);
@@ -422,16 +423,17 @@ worker_apply_shard_ddl_command(PG_FUNCTION_ARGS)
 Datum
 worker_fetch_regular_table(PG_FUNCTION_ARGS)
 {
-	text *regularTableName = PG_GETARG_TEXT_P(0);
-	uint64 generationStamp = PG_GETARG_INT64(1);
-	ArrayType *nodeNameObject = PG_GETARG_ARRAYTYPE_P(2);
-	ArrayType *nodePortObject = PG_GETARG_ARRAYTYPE_P(3);
+	text *regularSchemaName = PG_GETARG_TEXT_P(0);
+	text *regularTableName = PG_GETARG_TEXT_P(1);
+	uint64 generationStamp = PG_GETARG_INT64(2);
+	ArrayType *nodeNameObject = PG_GETARG_ARRAYTYPE_P(3);
+	ArrayType *nodePortObject = PG_GETARG_ARRAYTYPE_P(4);
 
 	/*
 	 * Run common logic to fetch the remote table, and use the provided function
 	 * pointer to perform the actual table fetching.
 	 */
-	FetchTableCommon(regularTableName, generationStamp,
+	FetchTableCommon(regularSchemaName, regularTableName, generationStamp,
 					 nodeNameObject, nodePortObject, &FetchRegularTable);
 
 	PG_RETURN_VOID();
@@ -446,16 +448,17 @@ worker_fetch_regular_table(PG_FUNCTION_ARGS)
 Datum
 worker_fetch_foreign_file(PG_FUNCTION_ARGS)
 {
-	text *foreignTableName = PG_GETARG_TEXT_P(0);
-	uint64 foreignFileSize = PG_GETARG_INT64(1);
-	ArrayType *nodeNameObject = PG_GETARG_ARRAYTYPE_P(2);
-	ArrayType *nodePortObject = PG_GETARG_ARRAYTYPE_P(3);
+	text *foreignSchemaName = PG_GETARG_TEXT_P(0);
+	text *foreignTableName = PG_GETARG_TEXT_P(1);
+	uint64 foreignFileSize = PG_GETARG_INT64(2);
+	ArrayType *nodeNameObject = PG_GETARG_ARRAYTYPE_P(3);
+	ArrayType *nodePortObject = PG_GETARG_ARRAYTYPE_P(4);
 
 	/*
 	 * Run common logic to fetch the remote table, and use the provided function
 	 * pointer to perform the actual table fetching.
 	 */
-	FetchTableCommon(foreignTableName, foreignFileSize,
+	FetchTableCommon(foreignSchemaName, foreignTableName, foreignFileSize,
 					 nodeNameObject, nodePortObject, &FetchForeignTable);
 
 	PG_RETURN_VOID();
@@ -469,10 +472,12 @@ worker_fetch_foreign_file(PG_FUNCTION_ARGS)
  * are retried in case of node failures.
  */
 static void
-FetchTableCommon(text *tableNameText, uint64 remoteTableSize,
+FetchTableCommon(text *tableSchemaNameText, text *tableNameText, uint64 remoteTableSize,
 				 ArrayType *nodeNameObject, ArrayType *nodePortObject,
-				 bool (*FetchTableFunction)(const char *, uint32, StringInfo))
+				 bool (*FetchTableFunction)(const char *, uint32, const char *, StringInfo))
 {
+	char *schemaName = NULL;
+	Oid schemaId = InvalidOid;
 	StringInfo tableName = NULL;
 	char *tableNameCString = NULL;
 	uint64 shardId = INVALID_SHARD_ID;
@@ -493,6 +498,7 @@ FetchTableCommon(text *tableNameText, uint64 remoteTableSize,
 	}
 
 	tableName = makeStringInfo();
+	schemaName = text_to_cstring(tableSchemaNameText);
 	tableNameCString = text_to_cstring(tableNameText);
 	appendStringInfoString(tableName, tableNameCString);
 
@@ -506,7 +512,8 @@ FetchTableCommon(text *tableNameText, uint64 remoteTableSize,
 	LockShardResource(shardId, AccessExclusiveLock);
 
 	/* check if we already fetched the table */
-	relationId = RelnameGetRelid(tableName->data);
+	schemaId = get_namespace_oid(schemaName, true);
+	relationId = get_relname_relid(tableName->data, schemaId);
 	if (relationId != InvalidOid)
 	{
 		uint64 localTableSize = 0;
@@ -557,7 +564,7 @@ FetchTableCommon(text *tableNameText, uint64 remoteTableSize,
 		char *nodeName = TextDatumGetCString(nodeNameDatum);
 		uint32 nodePort = DatumGetUInt32(nodePortDatum);
 
-		tableFetched = (*FetchTableFunction)(nodeName, nodePort, tableName);
+		tableFetched = (*FetchTableFunction)(nodeName, nodePort, schemaName, tableName);
 
 		nodeIndex++;
 	}
@@ -677,7 +684,8 @@ ExtractShardId(StringInfo tableName)
  * false. On other types of failures, the function errors out.
  */
 static bool
-FetchRegularTable(const char *nodeName, uint32 nodePort, StringInfo tableName)
+FetchRegularTable(const char *nodeName, uint32 nodePort, const char *schemaName,
+				  StringInfo tableName)
 {
 	StringInfo localFilePath = NULL;
 	StringInfo remoteCopyCommand = NULL;
@@ -689,7 +697,6 @@ FetchRegularTable(const char *nodeName, uint32 nodePort, StringInfo tableName)
 	bool received = false;
 	char *quotedTableName = NULL;
 	StringInfo queryString = NULL;
-	const char *schemaName = NULL;
 	const char *tableOwner = NULL;
 	Oid tableOwnerId = InvalidOid;
 	Oid savedUserId = InvalidOid;
@@ -712,7 +719,7 @@ FetchRegularTable(const char *nodeName, uint32 nodePort, StringInfo tableName)
 	}
 
 	/* fetch the ddl commands needed to create the table */
-	tableOwner = RemoteTableOwner(nodeName, nodePort, tableName);
+	tableOwner = RemoteTableOwner(nodeName, nodePort, schemaName, tableName->data);
 	if (tableOwner == NULL)
 	{
 		return false;
@@ -720,7 +727,7 @@ FetchRegularTable(const char *nodeName, uint32 nodePort, StringInfo tableName)
 	tableOwnerId = get_role_oid(tableOwner, false);
 
 	/* fetch the ddl commands needed to create the table */
-	ddlCommandList = TableDDLCommandList(nodeName, nodePort, tableName);
+	ddlCommandList = TableDDLCommandList(nodeName, nodePort, schemaName, tableName->data);
 	if (ddlCommandList == NIL)
 	{
 		return false;
@@ -777,7 +784,7 @@ FetchRegularTable(const char *nodeName, uint32 nodePort, StringInfo tableName)
  * commands against the local database, the function errors out.
  */
 static bool
-FetchForeignTable(const char *nodeName, uint32 nodePort, StringInfo tableName)
+FetchForeignTable(const char *nodeName, uint32 nodePort, const char *schemaName, StringInfo tableName)
 {
 	StringInfo localFilePath = NULL;
 	StringInfo remoteFilePath = NULL;
@@ -807,7 +814,7 @@ FetchForeignTable(const char *nodeName, uint32 nodePort, StringInfo tableName)
 	}
 
 	/* fetch the ddl commands needed to create the table */
-	ddlCommandList = TableDDLCommandList(nodeName, nodePort, tableName);
+	ddlCommandList = TableDDLCommandList(nodeName, nodePort, schemaName, tableName->data);
 	if (ddlCommandList == NIL)
 	{
 		return false;
@@ -842,15 +849,15 @@ FetchForeignTable(const char *nodeName, uint32 nodePort, StringInfo tableName)
  * the table. If an error occurs during fetching, return NULL.
  */
 static const char *
-RemoteTableOwner(const char *nodeName, uint32 nodePort, StringInfo tableName)
+RemoteTableOwner(const char *nodeName, uint32 nodePort, const char *schemaName, const char * tableName)
 {
 	List *ownerList = NIL;
 	StringInfo queryString = NULL;
-	const char *escapedTableName = quote_literal_cstr(tableName->data);
+	const char *qualifiedTableName = quote_qualified_identifier(schemaName, tableName);
 	StringInfo relationOwner;
 
 	queryString = makeStringInfo();
-	appendStringInfo(queryString, GET_TABLE_OWNER, escapedTableName);
+	appendStringInfo(queryString, GET_TABLE_OWNER, qualifiedTableName);
 
 	ownerList = ExecuteRemoteQuery(nodeName, nodePort, NULL, queryString);
 	if (list_length(ownerList) != 1)
@@ -870,13 +877,14 @@ RemoteTableOwner(const char *nodeName, uint32 nodePort, StringInfo tableName)
  * the function returns an empty list.
  */
 List *
-TableDDLCommandList(const char *nodeName, uint32 nodePort, StringInfo tableName)
+TableDDLCommandList(const char *nodeName, uint32 nodePort, const char *schemaName, const char *tableName)
 {
+	const char *qualifiedTableName = quote_qualified_identifier(schemaName, tableName);
 	List *ddlCommandList = NIL;
 	StringInfo queryString = NULL;
 
 	queryString = makeStringInfo();
-	appendStringInfo(queryString, GET_TABLE_DDL_EVENTS, tableName->data);
+	appendStringInfo(queryString, GET_TABLE_DDL_EVENTS, qualifiedTableName);
 
 	ddlCommandList = ExecuteRemoteQuery(nodeName, nodePort, NULL, queryString);
 	return ddlCommandList;

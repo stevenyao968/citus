@@ -244,18 +244,18 @@ COMMENT ON FUNCTION worker_fetch_query_results_file(bigint, integer, integer, te
                                                     integer)
     IS 'fetch query results file from remote node';
 
-CREATE FUNCTION worker_fetch_foreign_file(text, bigint, text[], integer[])
+CREATE FUNCTION worker_fetch_foreign_file(text, text, bigint, text[], integer[])
     RETURNS void
     LANGUAGE C STRICT
     AS 'MODULE_PATHNAME', $$worker_fetch_foreign_file$$;
-COMMENT ON FUNCTION worker_fetch_foreign_file(text, bigint, text[], integer[])
+COMMENT ON FUNCTION worker_fetch_foreign_file(text, text, bigint, text[], integer[])
     IS 'fetch foreign file from remote node and apply file';
 
-CREATE FUNCTION worker_fetch_regular_table(text, bigint, text[], integer[])
+CREATE FUNCTION worker_fetch_regular_table(text, text, bigint, text[], integer[])
     RETURNS void
     LANGUAGE C STRICT
     AS 'MODULE_PATHNAME', $$worker_fetch_regular_table$$;
-COMMENT ON FUNCTION worker_fetch_regular_table(text, bigint, text[], integer[])
+COMMENT ON FUNCTION worker_fetch_regular_table(text, text, bigint, text[], integer[])
     IS 'fetch PostgreSQL table from remote node';
 
 CREATE FUNCTION worker_range_partition_table(bigint, integer, text, text, oid, anyarray)
