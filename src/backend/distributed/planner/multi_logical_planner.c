@@ -555,7 +555,7 @@ ErrorIfSubqueryNotSupported(Query *subqueryTree)
 		preconditionsSatisfied = false;
 		errorDetail = "Subqueries with limit are not supported yet";
 	}
-	
+
 	if (subqueryTree->limitOffset != NULL)
 	{
 		preconditionsSatisfied = false;

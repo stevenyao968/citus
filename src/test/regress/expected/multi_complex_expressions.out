@@ -399,7 +399,6 @@ SELECT o_custkey FROM orders LIMIT 10 OFFSET 15;
 DEBUG:  push down of limit count: 25
 CREATE TEMP TABLE temp_limit_test_2 AS
 SELECT o_custkey FROM orders GROUP BY o_custkey LIMIT 10 OFFSET 15;
-DEBUG:  push down of limit count: 25
 CREATE TEMP TABLE temp_limit_test_3 AS
 SELECT o_custkey FROM orders GROUP BY o_custkey ORDER BY o_custkey LIMIT 10 OFFSET 15;
 DEBUG:  push down of limit count: 25

@@ -4107,9 +4107,9 @@ EqualOpExpressionLists(List *firstOpExpressionList, List *secondOpExpressionList
  *                              1/           \0
  *                          order by?         (exact pd)
  *                       1/           \0
- *           has order by agg?           has aggregate
- *            1/           \0            1/           \0
- *     can approximate?    (exact pd)   (no pd)     (exact pd)
+ *           has order by agg?          (no pd)
+ *            1/           \0
+ *     can approximate?    (exact pd)
  *      1/       \0
  * (approx pd)   (no pd)
  *
@@ -4147,11 +4147,7 @@ WorkerLimitCount(MultiExtendedOp *originalOpNode)
 	}
 	else if (sortClauseList == NIL)
 	{
-		bool hasAggregateTarget = contain_agg_clause((Node *) targetList);
-		if (!hasAggregateTarget)
-		{
-			canPushDownLimit = true;
-		}
+		canPushDownLimit = false;
 	}
 	else if (!hasOrderByAggregate)
 	{
