@@ -19,6 +19,7 @@
 #include "catalog/indexing.h"
 #include "catalog/pg_type.h"
 #include "distributed/citus_nodes.h"
+#include "distributed/datautils.h"
 #include "distributed/master_metadata_utility.h"
 #include "distributed/metadata_cache.h"
 #include "distributed/multi_join_order.h"
@@ -39,10 +40,6 @@
 #include "utils/rel.h"
 #include "utils/syscache.h"
 #include "utils/tqual.h"
-
-
-/* Local functions forward declarations */
-static uint64 * AllocateUint64(uint64 value);
 
 
 /* exports for SQL callable functions */
@@ -122,19 +119,6 @@ LoadShardList(Oid relationId)
 	}
 
 	return shardList;
-}
-
-
-/* Allocates eight bytes, and copies given value's contents those bytes. */
-static uint64 *
-AllocateUint64(uint64 value)
-{
-	uint64 *allocatedValue = (uint64 *) palloc0(sizeof(uint64));
-	Assert(sizeof(uint64) >= 8);
-
-	(*allocatedValue) = value;
-
-	return allocatedValue;
 }
 
 

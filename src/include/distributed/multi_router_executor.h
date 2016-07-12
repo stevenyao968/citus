@@ -9,19 +9,16 @@
 #ifndef MULTI_ROUTER_EXECUTOR_H_
 #define MULTI_ROUTER_EXECUTOR_H_
 
-#include "libpq-fe.h"
-
 #include "distributed/multi_physical_planner.h"
 #include "executor/execdesc.h"
 
 /* maximum (textual) lengths of hostname and port */
 #define MAX_NODE_LENGTH 255
 
-extern bool AllModificationsCommutative;
 
 /*
- * XactParticipantKey acts as the key to index into the (process-local) hash
- * keeping track of open connections. Node name and port are sufficient.
+ * XactParticipantKey acts as the key to index into the (transaction-local)
+ * hash keeping track of transaction connections and shards.
  */
 typedef struct XactParticipantKey
 {
@@ -30,13 +27,20 @@ typedef struct XactParticipantKey
 } XactParticipantKey;
 
 
-/* XactParticipantEntry keeps track of connections themselves. */
+struct PGconn; /* forward declared, to avoid having to include libpq-fe.h */
+
+/* XactParticipantEntry keeps track of connections and shards themselves. */
 typedef struct XactParticipantEntry
 {
 	XactParticipantKey cacheKey; /* hash entry key */
-	PGconn *connection;          /* connection to remote server, if any */
+	struct PGconn *connection;   /* connection to remote server, if any */
 	List *shardIds;              /* shard IDs touched during the transaction */
 } XactParticipantEntry;
+
+
+/* Config variables managed via guc.c */
+extern bool AllModificationsCommutative;
+
 
 extern void RouterExecutorStart(QueryDesc *queryDesc, int eflags, Task *task);
 extern void RouterExecutorRun(QueryDesc *queryDesc, ScanDirection direction, long count);
