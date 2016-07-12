@@ -1069,6 +1069,8 @@ ExecuteCommandOnWorkerShards(Oid relationId, const char *commandString,
 	ListCell *shardCell = NULL;
 	List *shardList = NIL;
 	char *relationOwner = TableOwner(relationId);
+	Oid schemaId = get_rel_namespace(relationId);
+	char *schemaName = get_namespace_name(schemaId);
 
 	shardList = LoadShardList(relationId);
 	foreach(shardCell, shardList)
@@ -1082,7 +1084,7 @@ ExecuteCommandOnWorkerShards(Oid relationId, const char *commandString,
 		char *escapedCommandString = quote_literal_cstr(commandString);
 		StringInfo applyCommand = makeStringInfo();
 		appendStringInfo(applyCommand, WORKER_APPLY_SHARD_DDL_COMMAND, shardId,
-						 escapedCommandString);
+						 quote_literal_cstr(schemaName), escapedCommandString);
 
 		shardPlacementList = FinalizedShardPlacementList(shardId);
 		foreach(shardPlacementCell, shardPlacementList)

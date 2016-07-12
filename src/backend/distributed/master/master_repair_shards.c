@@ -134,7 +134,7 @@ master_copy_shard_placement(PG_FUNCTION_ARGS)
 							targetPlacement->nodePort);
 
 	/* finally, drop/recreate remote table and add back row (in healthy state) */
-	CreateShardPlacements(shardId, ddlCommandList, relationOwner,
+	CreateShardPlacements(distributedTableId, shardId, ddlCommandList, relationOwner,
 						  list_make1(targetNode), 0, 1);
 
 	HOLD_INTERRUPTS();

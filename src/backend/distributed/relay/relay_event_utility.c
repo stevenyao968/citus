@@ -48,7 +48,7 @@ static void AppendShardIdToConstraintName(AlterTableCmd *command, uint64 shardId
  * function has the side effect of extending relation names in the parse tree.
  */
 void
-RelayEventExtendNames(Node *parseTree, uint64 shardId)
+RelayEventExtendNames(Node *parseTree, char *schemaName, uint64 shardId)
 {
 	/* we don't extend names in extension or schema commands */
 	NodeTag nodeType = nodeTag(parseTree);
@@ -63,6 +63,13 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 		{
 			AlterSeqStmt *alterSeqStmt = (AlterSeqStmt *) parseTree;
 			char **sequenceName = &(alterSeqStmt->sequence->relname);
+			char **sequenceSchemaName = &(alterSeqStmt->sequence->schemaname);
+
+			/* prefix with schema name if it is not added already */
+			if ((*sequenceSchemaName) == NULL)
+			{
+				*sequenceSchemaName = pstrdup(schemaName);
+			}
 
 			AppendShardIdToName(sequenceName, shardId);
 			break;
@@ -79,12 +86,19 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 
 			AlterTableStmt *alterTableStmt = (AlterTableStmt *) parseTree;
 			char **relationName = &(alterTableStmt->relation->relname);
+			char **relationSchemaName = &(alterTableStmt->relation->schemaname);
 			RangeVar *relation = alterTableStmt->relation;  /* for constraints */
 
 			List *commandList = alterTableStmt->cmds;
 			ListCell *commandCell = NULL;
 
-			/* first append shardId to base relation name */
+			/* prefix with schema name if it is not added already */
+			if ((*relationSchemaName) == NULL)
+			{
+				*relationSchemaName = pstrdup(schemaName);
+			}
+
+			/* append shardId to base relation name */
 			AppendShardIdToName(relationName, shardId);
 
 			foreach(commandCell, commandList)
@@ -110,6 +124,7 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 		{
 			ClusterStmt *clusterStmt = (ClusterStmt *) parseTree;
 			char **relationName = NULL;
+			char **relationSchemaName = NULL;
 
 			/* we do not support clustering the entire database */
 			if (clusterStmt->relation == NULL)
@@ -118,6 +133,14 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 			}
 
 			relationName = &(clusterStmt->relation->relname);
+			relationSchemaName = &(clusterStmt->relation->schemaname);
+
+			/* prefix with schema name if it is not added already */
+			if ((*relationSchemaName) == NULL)
+			{
+				*relationSchemaName = pstrdup(schemaName);
+			}
+
 			AppendShardIdToName(relationName, shardId);
 
 			if (clusterStmt->indexname != NULL)
@@ -133,6 +156,13 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 		{
 			CreateSeqStmt *createSeqStmt = (CreateSeqStmt *) parseTree;
 			char **sequenceName = &(createSeqStmt->sequence->relname);
+			char **sequenceSchemaName = &(createSeqStmt->sequence->schemaname);
+
+			/* prefix with schema name if it is not added already */
+			if ((*sequenceSchemaName) == NULL)
+			{
+				*sequenceSchemaName = pstrdup(schemaName);
+			}
 
 			AppendShardIdToName(sequenceName, shardId);
 			break;
@@ -165,6 +195,13 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 		{
 			CreateStmt *createStmt = (CreateStmt *) parseTree;
 			char **relationName = &(createStmt->relation->relname);
+			char **relationSchemaName = &(createStmt->relation->schemaname);
+
+			/* prefix with schema name if it is not added already */
+			if ((*relationSchemaName) == NULL)
+			{
+				*relationSchemaName = pstrdup(schemaName);
+			}
 
 			AppendShardIdToName(relationName, shardId);
 			break;
@@ -181,6 +218,7 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 			{
 				List *relationNameList = NULL;
 				int relationNameListLength = 0;
+				Value *relationSchemaNameValue = NULL;
 				Value *relationNameValue = NULL;
 				char **relationName = NULL;
 
@@ -212,12 +250,14 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 
 					case 2:
 					{
+						relationSchemaNameValue = linitial(relationNameList);
 						relationNameValue = lsecond(relationNameList);
 						break;
 					}
 
 					case 3:
 					{
+						relationSchemaNameValue = lsecond(relationNameList);
 						relationNameValue = lthird(relationNameList);
 						break;
 					}
@@ -229,6 +269,12 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 											   NameListToString(relationNameList))));
 						break;
 					}
+				}
+
+				/* prefix with schema name if it is not added already */
+				if (relationSchemaNameValue == NULL)
+				{
+					relationNameList = lcons(makeString(schemaName), relationNameList);
 				}
 
 				relationName = &(relationNameValue->val.str);
@@ -257,6 +303,14 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 				{
 					RangeVar *relation = (RangeVar *) lfirst(lc);
 					char **relationName = &(relation->relname);
+					char **relationSchemaName = &(relation->schemaname);
+
+					/* prefix with schema name if it is not added already */
+					if ((*relationSchemaName) == NULL)
+					{
+						*relationSchemaName = pstrdup(schemaName);
+					}
+
 					AppendShardIdToName(relationName, shardId);
 				}
 			}
@@ -268,6 +322,7 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 			IndexStmt *indexStmt = (IndexStmt *) parseTree;
 			char **relationName = &(indexStmt->relation->relname);
 			char **indexName = &(indexStmt->idxname);
+			char **relationSchemaName = &(indexStmt->relation->schemaname);
 
 			/*
 			 * Concurrent index statements cannot run within a transaction block.
@@ -290,6 +345,12 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 				ereport(ERROR, (errmsg("cannot extend name for null index name")));
 			}
 
+			/* prefix with schema name if it is not added already */
+			if ((*relationSchemaName) == NULL)
+			{
+				*relationSchemaName = pstrdup(schemaName);
+			}
+
 			AppendShardIdToName(relationName, shardId);
 			AppendShardIdToName(indexName, shardId);
 			break;
@@ -304,6 +365,14 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 			if (objectType == REINDEX_OBJECT_TABLE || objectType == REINDEX_OBJECT_INDEX)
 			{
 				char **objectName = &(reindexStmt->relation->relname);
+				char **objectSchemaName = &(reindexStmt->relation->schemaname);
+
+				/* prefix with schema name if it is not added already */
+				if ((*objectSchemaName) == NULL)
+				{
+					*objectSchemaName = pstrdup(schemaName);
+				}
+
 				AppendShardIdToName(objectName, shardId);
 			}
 			else if (objectType == REINDEX_OBJECT_DATABASE)
@@ -315,6 +384,14 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 			if (objectType == OBJECT_TABLE || objectType == OBJECT_INDEX)
 			{
 				char **objectName = &(reindexStmt->relation->relname);
+				char **objectSchemaName = &(reindexStmt->relation->schemaname);
+
+				/* prefix with schema name if it is not added already */
+				if ((*objectSchemaName) == NULL)
+				{
+					*objectSchemaName = pstrdup(schemaName);
+				}
+
 				AppendShardIdToName(objectName, shardId);
 			}
 			else if (objectType == OBJECT_DATABASE)
@@ -341,6 +418,13 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 			{
 				char **oldRelationName = &(renameStmt->relation->relname);
 				char **newRelationName = &(renameStmt->newname);
+				char **objectSchemaName = &(renameStmt->relation->schemaname);
+
+				/* prefix with schema name if it is not added already */
+				if ((*objectSchemaName) == NULL)
+				{
+					*objectSchemaName = pstrdup(schemaName);
+				}
 
 				AppendShardIdToName(oldRelationName, shardId);
 				AppendShardIdToName(newRelationName, shardId);
@@ -348,6 +432,13 @@ RelayEventExtendNames(Node *parseTree, uint64 shardId)
 			else if (objectType == OBJECT_COLUMN || objectType == OBJECT_TRIGGER)
 			{
 				char **relationName = &(renameStmt->relation->relname);
+				char **objectSchemaName = &(renameStmt->relation->schemaname);
+
+				/* prefix with schema name if it is not added already */
+				if ((*objectSchemaName) == NULL)
+				{
+					*objectSchemaName = pstrdup(schemaName);
+				}
 
 				AppendShardIdToName(relationName, shardId);
 			}

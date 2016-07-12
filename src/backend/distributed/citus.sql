@@ -309,11 +309,11 @@ CREATE FUNCTION worker_find_block_local_path(bigint, text[])
 COMMENT ON FUNCTION worker_find_block_local_path(bigint, text[])
     IS 'find an HDFS block''s local file path';
 
-CREATE FUNCTION worker_apply_shard_ddl_command(bigint, text)
+CREATE FUNCTION worker_apply_shard_ddl_command(bigint, text, text)
     RETURNS void
     LANGUAGE C STRICT
     AS 'MODULE_PATHNAME', $$worker_apply_shard_ddl_command$$;
-COMMENT ON FUNCTION worker_apply_shard_ddl_command(bigint, text)
+COMMENT ON FUNCTION worker_apply_shard_ddl_command(bigint, text, text)
     IS 'extend ddl command with shardId and apply on database';
 
 CREATE FUNCTION worker_append_table_to_shard(text, text, text, integer)
