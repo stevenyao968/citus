@@ -81,9 +81,9 @@ GetOrEstablishConnection(char *nodeName, int32 nodePort)
 	}
 
 	memset(&nodeConnectionKey, 0, sizeof(nodeConnectionKey));
-	strncpy(nodeConnectionKey.nodeName, nodeName, MAX_NODE_LENGTH);
+	strlcpy(nodeConnectionKey.nodeName, nodeName, MAX_NODE_LENGTH + 1);
 	nodeConnectionKey.nodePort = nodePort;
-	strncpy(nodeConnectionKey.nodeUser, userName, NAMEDATALEN);
+	strlcpy(nodeConnectionKey.nodeUser, userName, NAMEDATALEN);
 
 	nodeConnectionEntry = hash_search(NodeConnectionHash, &nodeConnectionKey,
 									  HASH_FIND, &entryFound);
@@ -151,9 +151,9 @@ PurgeConnection(PGconn *connection)
 	}
 
 	memset(&nodeConnectionKey, 0, sizeof(nodeConnectionKey));
-	strncpy(nodeConnectionKey.nodeName, nodeNameString, MAX_NODE_LENGTH);
+	strlcpy(nodeConnectionKey.nodeName, nodeNameString, MAX_NODE_LENGTH + 1);
 	nodeConnectionKey.nodePort = pg_atoi(nodePortString, sizeof(int32), 0);
-	strncpy(nodeConnectionKey.nodeUser, nodeUserString, NAMEDATALEN);
+	strlcpy(nodeConnectionKey.nodeUser, nodeUserString, NAMEDATALEN);
 
 	pfree(nodeNameString);
 	pfree(nodePortString);
