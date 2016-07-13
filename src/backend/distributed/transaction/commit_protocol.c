@@ -9,14 +9,15 @@
  *-------------------------------------------------------------------------
  */
 
+
 #include "postgres.h"
 #include "libpq-fe.h"
 #include "miscadmin.h"
 
 #include "access/xact.h"
+#include "distributed/commit_protocol.h"
 #include "distributed/connection_cache.h"
 #include "distributed/master_metadata_utility.h"
-#include "distributed/multi_transaction.h"
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
 

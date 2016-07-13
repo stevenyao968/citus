@@ -9,13 +9,14 @@
  *-------------------------------------------------------------------------
  */
 
+
 #include "libpq-fe.h"
 #include "postgres.h"
 
+#include "distributed/commit_protocol.h"
 #include "distributed/connection_cache.h"
 #include "distributed/master_metadata_utility.h"
-#include "distributed/multi_transaction.h"
-#include "distributed/shard_transaction.h"
+#include "distributed/multi_shard_transaction.h"
 #include "nodes/pg_list.h"
 
 
