@@ -27,13 +27,13 @@ typedef struct XactParticipantKey
 } XactParticipantKey;
 
 
-struct PGconn; /* forward declared, to avoid having to include libpq-fe.h */
+struct pg_conn; /* forward declared, to avoid having to include libpq-fe.h */
 
 /* XactParticipantEntry keeps track of connections and shards themselves. */
 typedef struct XactParticipantEntry
 {
 	XactParticipantKey cacheKey; /* hash entry key */
-	struct PGconn *connection;   /* connection to remote server, if any */
+	struct pg_conn *connection;  /* connection to remote server, if any */
 	List *shardIds;              /* shard IDs touched during the transaction */
 } XactParticipantEntry;
 

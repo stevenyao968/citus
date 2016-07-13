@@ -203,7 +203,6 @@ InitTransactionStateForTask(Task *task)
 		participantEntry->connection = connection;
 
 		shardIdPtr = AllocateUint64(placement->shardId);
-
 		participantEntry->shardIds = list_make1(shardIdPtr);
 	}
 
@@ -1030,14 +1029,18 @@ RouterTransactionCallback(XactEvent event, void *arg)
 	}
 
 	/* reset transaction state */
-	hash_destroy(xactParticipantHash);
 	xactParticipantHash = NULL;
 	subXactAbortAttempted = false;
 }
 
 
 /*
- * pgfdw_subxact_callback --- cleanup at subtransaction end.
+ * RouterSubtransactionCallback silently keeps track of any attempt to ROLLBACK
+ * TO SAVEPOINT, which is not permitted by this executor. At transaction end,
+ * the executor checks whether such a rollback was attempted and, if so, errors
+ * out entirely (with an appropriate message).
+ *
+ * This implementation permits savepoints so long as no rollbacks occur.
  */
 static void
 RouterSubtransactionCallback(SubXactEvent event, SubTransactionId subId,
