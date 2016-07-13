@@ -51,6 +51,7 @@
 #include "utils/datum.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
+#include "utils/memutils.h"
 
 
 static void LockShardsForModify(List *shardIntervalList);
@@ -210,58 +211,42 @@ SendQueryToShards(Query *query, List *shardIntervalList, Oid relationId)
 {
 	int affectedTupleCount = 0;
 	char *relationOwner = TableOwner(relationId);
-	HTAB *shardConnectionHash = OpenTransactionsToAllShardPlacements(shardIntervalList,
-																	 relationOwner);
-	List *allShardsConnectionList = ConnectionList(shardConnectionHash);
+	HTAB *shardConnectionHash = NULL;
+	ListCell *shardIntervalCell = NULL;
 
-	PG_TRY();
+	MemoryContext oldContext = MemoryContextSwitchTo(TopTransactionContext);
+
+	shardConnectionHash = OpenTransactionsToAllShardPlacements(shardIntervalList,
+															   relationOwner);
+
+	MemoryContextSwitchTo(oldContext);
+
+	foreach(shardIntervalCell, shardIntervalList)
 	{
-		ListCell *shardIntervalCell = NULL;
+		ShardInterval *shardInterval = (ShardInterval *) lfirst(
+			shardIntervalCell);
+		Oid relationId = shardInterval->relationId;
+		uint64 shardId = shardInterval->shardId;
+		bool shardConnectionsFound = false;
+		ShardConnections *shardConnections = NULL;
+		StringInfo shardQueryString = makeStringInfo();
+		char *shardQueryStringData = NULL;
+		int shardAffectedTupleCount = -1;
 
-		foreach(shardIntervalCell, shardIntervalList)
-		{
-			ShardInterval *shardInterval = (ShardInterval *) lfirst(
-				shardIntervalCell);
-			Oid relationId = shardInterval->relationId;
-			uint64 shardId = shardInterval->shardId;
-			bool shardConnectionsFound = false;
-			ShardConnections *shardConnections = NULL;
-			StringInfo shardQueryString = makeStringInfo();
-			char *shardQueryStringData = NULL;
-			int shardAffectedTupleCount = -1;
+		shardConnections = GetShardConnections(shardConnectionHash,
+											   shardId,
+											   &shardConnectionsFound);
+		Assert(shardConnectionsFound);
 
-			shardConnections = GetShardConnections(shardConnectionHash,
-												   shardId,
-												   &shardConnectionsFound);
-			Assert(shardConnectionsFound);
-
-			deparse_shard_query(query, relationId, shardId, shardQueryString);
-			shardQueryStringData = shardQueryString->data;
-			shardAffectedTupleCount = SendQueryToPlacements(shardQueryStringData,
-															shardConnections);
-			affectedTupleCount += shardAffectedTupleCount;
-		}
-
-		if (MultiShardCommitProtocol == COMMIT_PROTOCOL_2PC)
-		{
-			PrepareRemoteTransactions(allShardsConnectionList);
-		}
-
-		/* check for cancellation one last time before returning */
-		CHECK_FOR_INTERRUPTS();
+		deparse_shard_query(query, relationId, shardId, shardQueryString);
+		shardQueryStringData = shardQueryString->data;
+		shardAffectedTupleCount = SendQueryToPlacements(shardQueryStringData,
+														shardConnections);
+		affectedTupleCount += shardAffectedTupleCount;
 	}
-	PG_CATCH();
-	{
-		/* roll back all transactions */
-		AbortRemoteTransactions(allShardsConnectionList);
-		CloseConnections(allShardsConnectionList);
 
-		PG_RE_THROW();
-	}
-	PG_END_TRY();
-
-	CommitRemoteTransactions(allShardsConnectionList, false);
-	CloseConnections(allShardsConnectionList);
+	/* check for cancellation one last time before returning */
+	CHECK_FOR_INTERRUPTS();
 
 	return affectedTupleCount;
 }

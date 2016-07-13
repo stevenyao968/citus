@@ -29,16 +29,16 @@ typedef struct ShardConnections
 extern List *shardPlacementConnectionList;
 
 
+extern HTAB * OpenTransactionsToAllShardPlacements(List *shardIdList,
+												   char *relationOwner);
 extern HTAB * CreateShardConnectionHash(void);
+extern void OpenConnectionsToShardPlacements(uint64 shardId, HTAB *shardConnectionHash,
+											 char *nodeUser);
 extern ShardConnections * GetShardConnections(HTAB *shardConnectionHash,
 											  int64 shardId,
 											  bool *shardConnectionsFound);
-extern void OpenConnectionsToShardPlacements(uint64 shardId, HTAB *shardConnectionHash,
-											 char *nodeUser);
 extern List * ConnectionList(HTAB *connectionHash);
-extern void CloseConnections(List *connectionList);
-extern HTAB * OpenTransactionsToAllShardPlacements(List *shardIdList,
-												   char *relationOwner);
 extern void CompleteShardPlacementTransactions(XactEvent event, void *arg);
+extern void CloseConnections(List *connectionList);
 
 #endif /* SHARD_TRANSACTION_H */

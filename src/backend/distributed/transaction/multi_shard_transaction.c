@@ -25,6 +25,55 @@
 
 List *shardPlacementConnectionList = NIL;
 
+static void RegisterShardPlacementXactCallback(void);
+
+static bool isXactCallbackRegistered = false;
+
+
+/*
+ * OpenTransactionsToAllShardPlacements opens connections to all placements of
+ * the given shard Id Pointer List and returns the hash table containing the connections.
+ * The resulting hash table maps shardIds to ShardConnection structs.
+ */
+HTAB *
+OpenTransactionsToAllShardPlacements(List *shardIntervalList, char *userName)
+{
+	HTAB *shardConnectionHash = CreateShardConnectionHash();
+	ListCell *shardIntervalCell = NULL;
+	ListCell *connectionCell = NULL;
+	List *connectionList = NIL;
+
+	foreach(shardIntervalCell, shardIntervalList)
+	{
+		ShardInterval *shardInterval = (ShardInterval *) lfirst(shardIntervalCell);
+		uint64 shardId = shardInterval->shardId;
+
+		OpenConnectionsToShardPlacements(shardId, shardConnectionHash, userName);
+	}
+
+	connectionList = ConnectionList(shardConnectionHash);
+
+	foreach(connectionCell, connectionList)
+	{
+		TransactionConnection *transactionConnection =
+			(TransactionConnection *) lfirst(connectionCell);
+		PGconn *connection = transactionConnection->connection;
+		PGresult *result = NULL;
+
+		result = PQexec(connection, "BEGIN");
+		if (PQresultStatus(result) != PGRES_COMMAND_OK)
+		{
+			ReraiseRemoteError(connection, result);
+		}
+	}
+
+	shardPlacementConnectionList = ConnectionList(shardConnectionHash);
+
+	RegisterShardPlacementXactCallback();
+
+	return shardConnectionHash;
+}
+
 
 /*
  * CreateShardConnectionHash constructs a hash table used for shardId->Connection
@@ -48,31 +97,6 @@ CreateShardConnectionHash(void)
 									   hashFlags);
 
 	return shardConnectionsHash;
-}
-
-
-/*
- * GetShardConnections finds existing connections for a shard in the hash.
- * If not found, then a ShardConnections structure with empty connectionList
- * is returned.
- */
-ShardConnections *
-GetShardConnections(HTAB *shardConnectionHash, int64 shardId,
-					bool *shardConnectionsFound)
-{
-	ShardConnections *shardConnections = NULL;
-
-	shardConnections = (ShardConnections *) hash_search(shardConnectionHash,
-														&shardId,
-														HASH_ENTER,
-														shardConnectionsFound);
-	if (!*shardConnectionsFound)
-	{
-		shardConnections->shardId = shardId;
-		shardConnections->connectionList = NIL;
-	}
-
-	return shardConnections;
 }
 
 
@@ -136,6 +160,31 @@ OpenConnectionsToShardPlacements(uint64 shardId, HTAB *shardConnectionHash,
 
 
 /*
+ * GetShardConnections finds existing connections for a shard in the hash.
+ * If not found, then a ShardConnections structure with empty connectionList
+ * is returned.
+ */
+ShardConnections *
+GetShardConnections(HTAB *shardConnectionHash, int64 shardId,
+					bool *shardConnectionsFound)
+{
+	ShardConnections *shardConnections = NULL;
+
+	shardConnections = (ShardConnections *) hash_search(shardConnectionHash,
+														&shardId,
+														HASH_ENTER,
+														shardConnectionsFound);
+	if (!*shardConnectionsFound)
+	{
+		shardConnections->shardId = shardId;
+		shardConnections->connectionList = NIL;
+	}
+
+	return shardConnections;
+}
+
+
+/*
  * ConnectionList flattens the connection hash to a list of placement connections.
  */
 List *
@@ -161,62 +210,17 @@ ConnectionList(HTAB *connectionHash)
 
 
 /*
- * CloseConnections closes all connections in connectionList.
+ * EnableXactCallback ensures the XactCallback for committing/aborting
+ * remote worker transactions is registered.
  */
 void
-CloseConnections(List *connectionList)
+RegisterShardPlacementXactCallback(void)
 {
-	ListCell *connectionCell = NULL;
-
-	foreach(connectionCell, connectionList)
+	if (!isXactCallbackRegistered)
 	{
-		TransactionConnection *transactionConnection =
-			(TransactionConnection *) lfirst(connectionCell);
-		PGconn *connection = transactionConnection->connection;
-
-		PQfinish(connection);
+		RegisterXactCallback(CompleteShardPlacementTransactions, NULL);
+		isXactCallbackRegistered = true;
 	}
-}
-
-
-/*
- * OpenTransactionsToAllShardPlacements opens connections to all placements of
- * the given shard Id Pointer List and returns the hash table containing the connections.
- * The resulting hash table maps shardIds to ShardConnection structs.
- */
-HTAB *
-OpenTransactionsToAllShardPlacements(List *shardIntervalList, char *userName)
-{
-	HTAB *shardConnectionHash = CreateShardConnectionHash();
-	ListCell *shardIntervalCell = NULL;
-	ListCell *connectionCell = NULL;
-	List *connectionList = NIL;
-
-	foreach(shardIntervalCell, shardIntervalList)
-	{
-		ShardInterval *shardInterval = (ShardInterval *) lfirst(shardIntervalCell);
-		uint64 shardId = shardInterval->shardId;
-
-		OpenConnectionsToShardPlacements(shardId, shardConnectionHash, userName);
-	}
-
-	connectionList = ConnectionList(shardConnectionHash);
-
-	foreach(connectionCell, connectionList)
-	{
-		TransactionConnection *transactionConnection =
-			(TransactionConnection *) lfirst(connectionCell);
-		PGconn *connection = transactionConnection->connection;
-		PGresult *result = NULL;
-
-		result = PQexec(connection, "BEGIN");
-		if (PQresultStatus(result) != PGRES_COMMAND_OK)
-		{
-			ReraiseRemoteError(connection, result);
-		}
-	}
-
-	return shardConnectionHash;
 }
 
 
@@ -277,4 +281,23 @@ CompleteShardPlacementTransactions(XactEvent event, void *arg)
 
 	CloseConnections(shardPlacementConnectionList);
 	shardPlacementConnectionList = NIL;
+}
+
+
+/*
+ * CloseConnections closes all connections in connectionList.
+ */
+void
+CloseConnections(List *connectionList)
+{
+	ListCell *connectionCell = NULL;
+
+	foreach(connectionCell, connectionList)
+	{
+		TransactionConnection *transactionConnection =
+			(TransactionConnection *) lfirst(connectionCell);
+		PGconn *connection = transactionConnection->connection;
+
+		PQfinish(connection);
+	}
 }

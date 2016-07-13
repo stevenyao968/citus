@@ -87,14 +87,11 @@ static void ExecuteDistributedDDLCommand(Oid relationId, const char *ddlCommandS
 static bool ExecuteCommandOnWorkerShards(Oid relationId, const char *commandString);
 static void ExecuteCommandOnShardPlacements(StringInfo applyCommand, uint64 shardId,
 											ShardConnections *shardConnections);
-static void RegisterShardPlacementXactCallback(void);
 static bool AllFinalizedPlacementsAccessible(Oid relationId);
 static void RangeVarCallbackForDropIndex(const RangeVar *rel, Oid relOid, Oid oldRelOid,
 										 void *arg);
 static void CheckCopyPermissions(CopyStmt *copyStatement);
 static List * CopyGetAttnums(TupleDesc tupDesc, Relation rel, List *attnamelist);
-
-static bool isXactCallbackRegistered = false;
 
 
 /*
@@ -1071,10 +1068,7 @@ ExecuteCommandOnWorkerShards(Oid relationId, const char *commandString)
 	shardConnectionHash = OpenTransactionsToAllShardPlacements(shardIntervalList,
 															   tableOwner);
 
-	shardPlacementConnectionList = ConnectionList(shardConnectionHash);
 	MemoryContextSwitchTo(oldContext);
-
-	RegisterShardPlacementXactCallback();
 
 	foreach(shardIntervalCell, shardIntervalList)
 	{
@@ -1103,24 +1097,7 @@ ExecuteCommandOnWorkerShards(Oid relationId, const char *commandString)
 	/* check for cancellation one last time before returning */
 	CHECK_FOR_INTERRUPTS();
 
-	/* CloseConnections(allShardsConnectionList); */
-
 	return true;
-}
-
-
-/*
- * EnableXactCallback ensures the XactCallback for committing/aborting
- * remote worker transactions is registered.
- */
-static void
-RegisterShardPlacementXactCallback(void)
-{
-	if (!isXactCallbackRegistered)
-	{
-		RegisterXactCallback(CompleteShardPlacementTransactions, NULL);
-		isXactCallbackRegistered = true;
-	}
 }
 
 
