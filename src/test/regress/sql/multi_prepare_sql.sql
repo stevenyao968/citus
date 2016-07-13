@@ -193,6 +193,19 @@ EXECUTE prepared_select(4, 40);
 EXECUTE prepared_select(5, 50);
 EXECUTE prepared_select(6, 60);
 
+-- test that we don't crash on failing parameterized insert on the partition column
+
+PREPARE prepared_partition_column_insert(bigint) AS
+INSERT INTO router_executor_table VALUES ($1, 'arsenous', ROW(1,10));
+
+-- we error out on the 6th execution
+EXECUTE prepared_partition_column_insert(1);
+EXECUTE prepared_partition_column_insert(2);
+EXECUTE prepared_partition_column_insert(3);
+EXECUTE prepared_partition_column_insert(4);
+EXECUTE prepared_partition_column_insert(5);
+EXECUTE prepared_partition_column_insert(6);
+
 DROP TYPE test_composite_type CASCADE;
 
 -- clean-up prepared statements
