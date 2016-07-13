@@ -161,10 +161,19 @@ SELECT count(*) FROM lineitem, orders WHERE l_orderkey + 1 = o_orderkey;
 
 -- Check that we can issue limit/offset queries
 
+-- OFFSET in Subqueries are not supported
+-- Error in the planner when subquery pushdown is off
+SELECT * FROM (SELECT o_orderkey FROM orders ORDER BY o_orderkey OFFSET 20) sq;
+SET citus.subquery_pushdown TO true;
+-- Error in the optimizer when subquery pushdown is on
+SELECT * FROM (SELECT o_orderkey FROM orders ORDER BY o_orderkey OFFSET 20) sq;
+SET citus.subquery_pushdown TO false;
+
 -- Simple LIMIT/OFFSET with ORDER BY
 SELECT o_orderkey FROM orders ORDER BY o_orderkey LIMIT 10 OFFSET 20;
 
 -- LIMIT/OFFSET with a subquery
+SET client_min_messages TO 'debug1';
 SET citus.task_executor_type TO 'task-tracker';
 SELECT 
 	customer_keys.o_custkey,
@@ -181,26 +190,21 @@ LIMIT 10 OFFSET 20;
 SET citus.task_executor_type TO 'real-time';
 
 -- Ensure that we push down LIMIT and OFFSET properly
-SET client_min_messages TO 'debug1';
-
+-- No Group-By -> Push Down
 CREATE TEMP TABLE temp_limit_test_1 AS
 SELECT o_custkey FROM orders LIMIT 10 OFFSET 15;
 
+-- GROUP BY without ORDER BY -> No push-down
 CREATE TEMP TABLE temp_limit_test_2 AS
 SELECT o_custkey FROM orders GROUP BY o_custkey LIMIT 10 OFFSET 15;
 
+-- GROUP BY and ORDER BY non-aggregate -> push-down
 CREATE TEMP TABLE temp_limit_test_3 AS
 SELECT o_custkey FROM orders GROUP BY o_custkey ORDER BY o_custkey LIMIT 10 OFFSET 15;
 
--- Order by aggregate -> No push-down
+-- GROUP BY and ORDER BY aggregate -> No push-down
 CREATE TEMP TABLE temp_limit_test_4 AS
 SELECT o_custkey, COUNT(*) AS ccnt FROM orders GROUP BY o_custkey ORDER BY ccnt DESC LIMIT 10 OFFSET 15;
-
--- Has aggregate but no order-by -> No push-down
-CREATE TEMP TABLE temp_limit_test_5 AS
-SELECT o_custkey, COUNT(*) AS ccnt FROM orders GROUP BY o_custkey LIMIT 10 OFFSET 15;
-
-RESET client_min_messages;
 
 -- OFFSET without LIMIT
 SELECT o_custkey FROM orders ORDER BY o_custkey OFFSET 2980;
@@ -217,3 +221,5 @@ WHERE
 ORDER BY
 	li.l_quantity
 LIMIT 10 OFFSET 20;
+
+RESET client_min_messages;

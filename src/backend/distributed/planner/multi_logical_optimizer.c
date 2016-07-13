@@ -2727,7 +2727,7 @@ ErrorIfCannotPushdownSubquery(Query *subqueryTree, bool outerQueryHasLimit)
 	if (subqueryTree->limitOffset)
 	{
 		preconditionsSatisfied = false;
-		errorDetail = "Limit Offset clause is currently unsupported";
+		errorDetail = "Offset clause is currently unsupported";
 	}
 
 	if (subqueryTree->limitCount && !outerQueryHasLimit)
