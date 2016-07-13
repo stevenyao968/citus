@@ -19,6 +19,8 @@
 #include "miscadmin.h"
 
 #include "access/xact.h"
+#include "access/transam.h"
+#include "catalog/pg_type.h"
 #include "distributed/citus_clauses.h"
 #include "distributed/citus_ruleutils.h"
 #include "distributed/connection_cache.h"
@@ -33,6 +35,7 @@
 #include "utils/builtins.h"
 #include "utils/elog.h"
 #include "utils/errcodes.h"
+#include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/palloc.h"
 #include "utils/int8.h"
@@ -55,7 +58,8 @@ static uint64 ReturnRowsFromTuplestore(uint64 tupleCount, TupleDesc tupleDescrip
 									   DestReceiver *destination,
 									   Tuplestorestate *tupleStore);
 static void DeparseShardQuery(Query *query, Task *task, StringInfo queryString);
-static bool SendQueryInSingleRowMode(PGconn *connection, char *query);
+static bool SendQueryInSingleRowMode(PGconn *connection, char *query,
+									 ParamListInfo paramListInfo);
 static bool StoreQueryResult(MaterialState *routerState, PGconn *connection,
 							 TupleDesc tupleDescriptor, int64 *rows);
 static bool ConsumeQueryResult(PGconn *connection, int64 *rows);
@@ -316,6 +320,7 @@ ExecuteTaskAndStoreResults(QueryDesc *queryDesc, Task *task,
 	TupleDesc tupleDescriptor = queryDesc->tupDesc;
 	EState *executorState = queryDesc->estate;
 	MaterialState *routerState = (MaterialState *) queryDesc->planstate;
+	ParamListInfo paramListInfo = queryDesc->params;
 	bool resultsOK = false;
 	List *taskPlacementList = task->taskPlacementList;
 	ListCell *taskPlacementCell = NULL;
@@ -359,7 +364,7 @@ ExecuteTaskAndStoreResults(QueryDesc *queryDesc, Task *task,
 			continue;
 		}
 
-		queryOK = SendQueryInSingleRowMode(connection, queryString);
+		queryOK = SendQueryInSingleRowMode(connection, queryString, paramListInfo);
 		if (!queryOK)
 		{
 			PurgeConnection(connection);
@@ -515,12 +520,58 @@ ReturnRowsFromTuplestore(uint64 tupleCount, TupleDesc tupleDescriptor,
  * connection so that we receive results a row at a time.
  */
 static bool
-SendQueryInSingleRowMode(PGconn *connection, char *query)
+SendQueryInSingleRowMode(PGconn *connection, char *query, ParamListInfo paramListInfo)
 {
 	int querySent = 0;
 	int singleRowMode = 0;
 
-	querySent = PQsendQuery(connection, query);
+	if (paramListInfo != NULL)
+	{
+		int parameterIndex = 0;
+		int parameterCount = paramListInfo->numParams;
+		Oid *parameterTypes = palloc(parameterCount * sizeof(Oid));
+		const char **parameterValues = palloc(parameterCount * sizeof(char *));
+
+		/* get parameter types and values */
+		for (parameterIndex = 0; parameterIndex < parameterCount; parameterIndex++)
+		{
+			ParamExternData *parameterData = &paramListInfo->params[parameterIndex];
+			Oid typeOutputFunctionId = InvalidOid;
+			bool variableLengthType = false;
+
+			/*
+			 * Use text oid for data types where the oid values can be different
+			 * on the master and worker nodes.
+			 */
+			if (parameterData->ptype >= FirstNormalObjectId)
+			{
+				parameterTypes[parameterIndex] = TEXTOID;
+			}
+			else
+			{
+				parameterTypes[parameterIndex] = parameterData->ptype;
+			}
+
+			if (parameterData->isnull)
+			{
+				parameterValues[parameterIndex] = NULL;
+				continue;
+			}
+
+			getTypeOutputInfo(parameterData->ptype, &typeOutputFunctionId,
+							  &variableLengthType);
+			parameterValues[parameterIndex] = OidOutputFunctionCall(typeOutputFunctionId,
+																	parameterData->value);
+		}
+
+		querySent = PQsendQueryParams(connection, query, parameterCount, parameterTypes,
+									  parameterValues, NULL, NULL, 0);
+	}
+	else
+	{
+		querySent = PQsendQuery(connection, query);
+	}
+
 	if (querySent == 0)
 	{
 		WarnRemoteError(connection, NULL);
